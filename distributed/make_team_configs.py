@@ -22,6 +22,12 @@ SERVICE_CATALOG = {
     "proxy",
     "waf",
     "supply",
+    "edge",
+    "media",
+    "agent",
+    "saml",
+    "hook",
+    "ledger",
 }
 ROUND_SECONDS = int(os.environ.get("FTF_ROUND_SECONDS", "300"))
 HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("FTF_TEAM_HEARTBEAT_INTERVAL_SECONDS", "30"))

@@ -61,7 +61,13 @@ python3 build_team_packages.py
     "cipher",
     "proxy",
     "waf",
-    "supply"
+    "supply",
+    "edge",
+    "media",
+    "agent",
+    "saml",
+    "hook",
+    "ledger"
   ]
 }
 ```
@@ -105,7 +111,7 @@ http://127.0.0.1:9100
 - Checker 成功連到隊伍並取回正確 flag 會給 availability/integrity 分
 - `/admin/penalties` 可手動登錄違規扣分
 - `/admin/export` 可匯出賽後 JSON
-- 目前服務：`default`, `token`, `shop`, `memo`, `archive`, `vault`, `cipher`, `proxy`, `waf`, `supply`
+- 目前服務：`default`, `token`, `shop`, `memo`, `archive`, `vault`, `cipher`, `proxy`, `waf`, `supply`, `edge`, `media`, `agent`, `saml`, `hook`, `ledger`
 
 ## Challenge Families
 
@@ -121,6 +127,12 @@ http://127.0.0.1:9100
 - `proxy`：SSRF / allowlist parser confusion
 - `waf`：WAF 與後端 duplicate parameter precedence 差異
 - `supply`：供應鏈 manifest 簽章未涵蓋 trust-critical 欄位
+- `edge`：session diagnostic overread / token disclosure
+- `media`：media asset URL fragment / path parser confusion
+- `agent`：AI agent tool guard 與 dispatcher 邊界錯誤
+- `saml`：signature wrapping / duplicate claim authorization
+- `hook`：OAuth redirect prefix validation confusion
+- `ledger`：交易簽章未涵蓋 amount / recipient 的商業邏輯漏洞
 
 設計參考：
 
@@ -128,7 +140,8 @@ http://127.0.0.1:9100
 - DEF CON CTF 類 Attack-Defense「防守自己的服務，同時打別隊服務」模式
 - 近期公開研究中的 WAF parser discrepancy 類型
 - 近期 supply-chain incident 常見的 manifest、workflow、package trust 邊界
-- hackme_web 分支中大量存在的檔案分享、路徑解析、代理轉發、AI agent/tool boundary 類風險面，已抽象成靶場題型
+- 近期 edge/VPN gateway token disclosure、auth bypass、path traversal 類通報趨勢
+- hackme_web 分支中大量存在的檔案分享、路徑解析、代理轉發、AI agent/tool boundary、交易/點數簽章類風險面，已抽象成靶場題型
 
 ## Submit Flags
 

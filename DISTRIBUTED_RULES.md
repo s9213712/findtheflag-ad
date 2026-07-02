@@ -304,9 +304,15 @@ cipher   - malleable encrypted session
 proxy    - SSRF / URL parser confusion
 waf      - duplicate parameter parser discrepancy
 supply   - incomplete manifest signature coverage
+edge     - session diagnostic overread
+media    - media asset URL fragment confusion
+agent    - AI agent tool boundary confusion
+saml     - signature wrapping / duplicate claim auth
+hook     - OAuth redirect prefix parser confusion
+ledger   - incomplete transaction signature coverage
 ```
 
-這些服務參考官方 A/D 題常見 service/checker 模式與近期公開漏洞趨勢，並把 hackme_web 類大型網站常見的檔案分享、路徑解析、代理轉發、AI/tool 邊界風險抽象成可控靶場題。
+這些服務參考官方 A/D 題常見 service/checker 模式與近期公開漏洞趨勢，並把 hackme_web 類大型網站常見的檔案分享、路徑解析、代理轉發、AI/tool 邊界、交易/點數簽章風險抽象成可控靶場題。
 
 ## Server Crash / Disconnect Handling
 

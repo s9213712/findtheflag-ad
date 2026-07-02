@@ -90,6 +90,36 @@ SERVICE_CATALOG = {
         "category": "Supply chain / Manifest validation",
         "description": "Update manifest integrity check omits trust-critical install fields.",
     },
+    "edge": {
+        "name": "Edge Session",
+        "category": "Memory / Session disclosure",
+        "description": "Diagnostic read length can expose adjacent session cache data.",
+    },
+    "media": {
+        "name": "Media Packager",
+        "category": "Files / URL parsing",
+        "description": "Poster asset validation and packager path resolution disagree about fragments.",
+    },
+    "agent": {
+        "name": "Agent Tools",
+        "category": "AI agent / Tool boundary",
+        "description": "Tool guard validates only the first action while dispatcher executes the full chain.",
+    },
+    "saml": {
+        "name": "SAML Gateway",
+        "category": "Auth / Signature wrapping",
+        "description": "Verifier signs one role claim but authorizer consumes another.",
+    },
+    "hook": {
+        "name": "OAuth Relay",
+        "category": "Auth / Redirect parsing",
+        "description": "Redirect prefix allowlist runs before URL authority parsing.",
+    },
+    "ledger": {
+        "name": "Points Ledger",
+        "category": "Business logic / Incomplete signing",
+        "description": "Transaction signature omits amount and recipient.",
+    },
 }
 DEFAULT_SCORING = {
     "attack_flag_points": 10,

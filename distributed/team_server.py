@@ -39,6 +39,12 @@ SERVICE_META = {
     "proxy": "Internal Proxy",
     "waf": "WAF Gateway",
     "supply": "Supply Update",
+    "edge": "Edge Session",
+    "media": "Media Packager",
+    "agent": "Agent Tools",
+    "saml": "SAML Gateway",
+    "hook": "OAuth Relay",
+    "ledger": "Points Ledger",
 }
 
 
@@ -584,6 +590,197 @@ def supply_service(query: dict[str, list[str]]) -> tuple[int, str, str]:
     return page("Supply Update", body)
 
 
+def edge_service(query: dict[str, list[str]]) -> tuple[int, str, str]:
+    sid = query.get("sid", ["guest-a7f3"])[0]
+    size_raw = query.get("bytes", ["24"])[0]
+    public = f"sid={sid};role=guest;status=ok;"
+    adjacent = f"session-cache={flag_for('edge')};audit=clean;"
+    try:
+        size = max(0, min(int(size_raw), 220))
+    except ValueError:
+        size = 24
+    leaked = (public + adjacent)[:size]
+    body = f"""
+    <h1>Edge Session</h1>
+    <div class="notice">The edge cache trusts a caller-supplied read length for session diagnostics.</div>
+    <div class="card">
+      <form>
+        <label>Session ID</label>
+        <input name="sid" value="{esc(sid)}">
+        <label>Bytes</label>
+        <input name="bytes" value="{esc(size_raw)}">
+        <button>Read</button>
+      </form>
+    </div>
+    <pre>{esc(leaked)}</pre>
+    """
+    return page("Edge Session", body)
+
+
+def media_service(query: dict[str, list[str]]) -> tuple[int, str, str]:
+    asset = query.get("asset", ["cover.jpg"])[0]
+    if not asset.endswith(".jpg"):
+        message = "Only poster image assets may be previewed."
+    else:
+        decoded = urllib.parse.unquote(asset)
+        logical_path = decoded.split("#", 1)[0]
+        if logical_path == "keys/flag.m3u8":
+            message = f"Media key manifest: {flag_for('media')}"
+        elif logical_path == "cover.jpg":
+            message = "Poster preview is ready."
+        else:
+            message = "Asset not found."
+    body = f"""
+    <h1>Media Packager</h1>
+    <div class="notice">Poster preview validation and packager path resolution disagree about URL fragments.</div>
+    <div class="card">
+      <form>
+        <label>Asset</label>
+        <input name="asset" value="{esc(asset)}">
+        <button>Preview</button>
+      </form>
+    </div>
+    <pre>{esc(message)}</pre>
+    """
+    return page("Media Packager", body)
+
+
+def agent_service(query: dict[str, list[str]]) -> tuple[int, str, str]:
+    command = query.get("command", ["read:status"])[0]
+    first_action = command.split(";", 1)[0]
+    actions = [item.strip() for item in command.split(";") if item.strip()]
+    if not first_action.startswith("read:"):
+        message = "Tool guard rejected non-read action."
+    elif "export:flag" in actions:
+        message = f"Tool dispatcher exported protected context: {flag_for('agent')}"
+    elif "read:status" in actions:
+        message = "Agent status: all tools idle."
+    else:
+        message = "Read tool completed with no records."
+    body = f"""
+    <h1>Agent Tools</h1>
+    <div class="notice">The policy guard checks the first tool action, while the dispatcher executes the full chain.</div>
+    <div class="card">
+      <form>
+        <label>Tool Command</label>
+        <input name="command" value="{esc(command)}">
+        <button>Run</button>
+      </form>
+    </div>
+    <pre>{esc(message)}</pre>
+    """
+    return page("Agent Tools", body)
+
+
+def saml_signature(user: str, role: str) -> str:
+    return hmac.new(b"saml-demo-key", f"user={user};role={role}".encode(), hashlib.sha256).hexdigest()[:12]
+
+
+def saml_service(query: dict[str, list[str]]) -> tuple[int, str, str]:
+    user = query.get("user", ["guest"])[0]
+    roles = query.get("role", ["user"])
+    sig = query.get("sig", [""])[0]
+    signed_role = roles[0] if roles else "user"
+    app_role = roles[-1] if roles else "user"
+    expected = saml_signature(user, signed_role)
+    sample_sig = saml_signature("guest", "user")
+    if sig != expected:
+        message = "Assertion signature rejected."
+    elif app_role == "admin":
+        message = f"Wrapped assertion accepted. SAML flag: {flag_for('saml')}"
+    else:
+        message = f"Signed in {user} as {app_role}."
+    role_inputs = "".join(f'<input name="role" value="{esc(role)}">' for role in roles)
+    body = f"""
+    <h1>SAML Gateway</h1>
+    <div class="notice">The verifier signs the first role claim, while the application authorizer uses the last role claim.</div>
+    <div class="card">
+      <p>Example signature for <code>guest/user</code>: <code>{esc(sample_sig)}</code></p>
+      <form>
+        <label>User</label>
+        <input name="user" value="{esc(user)}">
+        <label>Role Claim(s)</label>
+        {role_inputs}
+        <label>Signature</label>
+        <input name="sig" value="{esc(sig)}">
+        <button>Login</button>
+      </form>
+    </div>
+    <pre>{esc(message)}</pre>
+    """
+    return page("SAML Gateway", body)
+
+
+def hook_service(query: dict[str, list[str]]) -> tuple[int, str, str]:
+    redirect = query.get("redirect", ["https://trusted.service.local/callback"])[0]
+    if not redirect.startswith("https://trusted.service.local"):
+        message = "Relay allowlist rejected redirect URI."
+    else:
+        parsed = urllib.parse.urlparse(urllib.parse.unquote(redirect))
+        if parsed.hostname == "vault.internal":
+            message = f"Relay delivered code to internal vault: {flag_for('hook')}"
+        else:
+            message = f"Authorization code delivered to {parsed.hostname or 'unknown'}."
+    body = f"""
+    <h1>OAuth Relay</h1>
+    <div class="notice">The relay validates redirect prefixes before URL authority parsing.</div>
+    <div class="card">
+      <form>
+        <label>Redirect URI</label>
+        <input name="redirect" value="{esc(redirect)}">
+        <button>Authorize</button>
+      </form>
+    </div>
+    <pre>{esc(message)}</pre>
+    """
+    return page("OAuth Relay", body)
+
+
+def ledger_service(query: dict[str, list[str]]) -> tuple[int, str, str]:
+    account = query.get("account", ["guest"])[0]
+    action = query.get("action", ["transfer"])[0]
+    amount_raw = query.get("amount", ["10"])[0]
+    recipient = query.get("recipient", ["store"])[0]
+    nonce = query.get("nonce", ["1"])[0]
+    sig = query.get("sig", [""])[0]
+    expected = hashlib.sha1(f"{account}:{action}:{nonce}:ledger".encode()).hexdigest()[:10]
+    sample_sig = hashlib.sha1(b"guest:transfer:1:ledger").hexdigest()[:10]
+    try:
+        amount = int(amount_raw)
+    except ValueError:
+        amount = 0
+    if sig != expected:
+        message = "Ledger signature rejected."
+    elif action == "transfer" and recipient == "treasury" and amount >= 9000:
+        message = f"Privileged ledger transfer accepted. Ledger flag: {flag_for('ledger')}"
+    else:
+        message = f"Queued {action} of {amount} points from {account} to {recipient}."
+    body = f"""
+    <h1>Points Ledger</h1>
+    <div class="notice">Transaction signatures bind account, action, and nonce, but not amount or recipient.</div>
+    <div class="card">
+      <p>Example signature for <code>guest/transfer/1</code>: <code>{esc(sample_sig)}</code></p>
+      <form>
+        <label>Account</label>
+        <input name="account" value="{esc(account)}">
+        <label>Action</label>
+        <input name="action" value="{esc(action)}">
+        <label>Amount</label>
+        <input name="amount" value="{esc(amount_raw)}">
+        <label>Recipient</label>
+        <input name="recipient" value="{esc(recipient)}">
+        <label>Nonce</label>
+        <input name="nonce" value="{esc(nonce)}">
+        <label>Signature</label>
+        <input name="sig" value="{esc(sig)}">
+        <button>Submit</button>
+      </form>
+    </div>
+    <pre>{esc(message)}</pre>
+    """
+    return page("Points Ledger", body)
+
+
 SERVICE_RENDERERS = {
     "default": default_service,
     "token": token_service,
@@ -595,6 +792,12 @@ SERVICE_RENDERERS = {
     "proxy": proxy_service,
     "waf": waf_service,
     "supply": supply_service,
+    "edge": edge_service,
+    "media": media_service,
+    "agent": agent_service,
+    "saml": saml_service,
+    "hook": hook_service,
+    "ledger": ledger_service,
 }
 
 

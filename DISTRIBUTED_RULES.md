@@ -287,6 +287,27 @@ Total:
 total = attack + availability + integrity - penalty
 ```
 
+## Challenge Service Selection
+
+主持人可在賽前於管理頁多選本場要放入隊伍 package 的漏洞服務。所有隊伍拿到相同 `team_server.py` 與相同服務清單，只有 `team_config.json` 內的隊伍 ID、secret、port/public URL 不同。
+
+Current catalog:
+
+```text
+default  - default credentials
+token    - unsigned role token
+shop     - business logic underflow
+memo     - SQL injection
+archive  - encoded traversal / canonicalization confusion
+vault    - predictable recovery code
+cipher   - malleable encrypted session
+proxy    - SSRF / URL parser confusion
+waf      - duplicate parameter parser discrepancy
+supply   - incomplete manifest signature coverage
+```
+
+這些服務參考官方 A/D 題常見 service/checker 模式與近期公開漏洞趨勢，並把 hackme_web 類大型網站常見的檔案分享、路徑解析、代理轉發、AI/tool 邊界風險抽象成可控靶場題。
+
 ## Server Crash / Disconnect Handling
 
 ### Team Server Disconnects From Admin

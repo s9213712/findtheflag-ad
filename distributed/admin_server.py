@@ -55,6 +55,41 @@ SERVICE_CATALOG = {
         "category": "Logic",
         "description": "Coupon and quantity logic can underflow restricted item price.",
     },
+    "memo": {
+        "name": "Memo Search",
+        "category": "Data / SQL injection",
+        "description": "Search query is interpolated into a report database query.",
+    },
+    "archive": {
+        "name": "Archive Viewer",
+        "category": "Files / Canonicalization",
+        "description": "Document lookup decodes paths after a shallow traversal filter.",
+    },
+    "vault": {
+        "name": "Recovery Vault",
+        "category": "Auth / Predictable recovery",
+        "description": "Admin recovery code is derived from public match state.",
+    },
+    "cipher": {
+        "name": "Cipher Session",
+        "category": "Crypto / Malleability",
+        "description": "Encrypted session data is trusted without authentication.",
+    },
+    "proxy": {
+        "name": "Internal Proxy",
+        "category": "SSRF / Parser confusion",
+        "description": "Proxy allowlist validates raw URL text differently from the backend resolver.",
+    },
+    "waf": {
+        "name": "WAF Gateway",
+        "category": "HTTP / Parser discrepancy",
+        "description": "Gateway and application disagree on duplicate parameter precedence.",
+    },
+    "supply": {
+        "name": "Supply Update",
+        "category": "Supply chain / Manifest validation",
+        "description": "Update manifest integrity check omits trust-critical install fields.",
+    },
 }
 DEFAULT_SCORING = {
     "attack_flag_points": 10,
@@ -164,6 +199,52 @@ def generate_team_configs() -> None:
         (config_dir / f"{team}.team_config.json").write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def team_starter_html(team: str, cfg: dict[str, Any]) -> str:
+    public_url = str(cfg["public_base_url"])
+    admin_url = str(cfg["admin_url"])
+    return f"""<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FindTheFlag Team {esc(team)}</title>
+  <style>
+    body {{ margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f7fa; color:#17212b; }}
+    header {{ background:#102631; color:white; padding:18px 22px; border-bottom:4px solid #d8a331; }}
+    main {{ max-width:900px; margin:0 auto; padding:22px; }}
+    .card {{ background:white; border:1px solid #d9e0e8; border-radius:8px; padding:16px; margin:14px 0; }}
+    code,pre {{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }}
+    pre {{ background:#101827; color:#d8f3ff; padding:12px; border-radius:6px; overflow:auto; }}
+    a.button {{ display:inline-flex; background:#176b87; color:white; text-decoration:none; border-radius:6px; padding:9px 12px; font-weight:700; }}
+  </style>
+</head>
+<body>
+  <header><strong>FindTheFlag Team Package: {esc(team)}</strong></header>
+  <main>
+    <div class="card">
+      <h1>{esc(team)} Initialization</h1>
+      <p>This page is the local handoff page for the hardening window.</p>
+      <p><a class="button" href="{esc(public_url)}">Open Team Server</a></p>
+    </div>
+    <div class="card">
+      <h2>Start Server</h2>
+      <pre>FTF_TEAM_CONFIG=team_config.json python3 team_server.py</pre>
+    </div>
+    <div class="card">
+      <h2>Endpoints</h2>
+      <p>Team server: <code>{esc(public_url)}</code></p>
+      <p>Admin server: <code>{esc(admin_url)}</code></p>
+    </div>
+    <div class="card">
+      <h2>Submit During Live</h2>
+      <pre>FTF_TEAM_CONFIG=team_config.json python3 submit_flag.py 'FTF{{...}}'</pre>
+    </div>
+  </main>
+</body>
+</html>
+"""
+
+
 def generate_team_packages() -> None:
     generate_team_configs()
     output_dir = BASE_DIR / "generated" / "team_packages"
@@ -179,6 +260,7 @@ def generate_team_packages() -> None:
         (package_dir / "submit_flag.py").chmod(0o755)
         shutil.copy2(BASE_DIR / "configs" / f"{team}.team_config.json", package_dir / "team_config.json")
         (package_dir / "public").mkdir(exist_ok=True)
+        (package_dir / "public" / "index.html").write_text(team_starter_html(team, cfg), encoding="utf-8")
         (package_dir / "README.md").write_text(
             f"# Team Package: {team}\n\nEnabled services:\n\n{chr(10).join('- ' + service for service in cfg.get('services', ['default']))}\n\nRun:\n\n```bash\nFTF_TEAM_CONFIG=team_config.json python3 team_server.py\n```\n\nTeam URL:\n\n```text\n{cfg['public_base_url']}\n```\n\nSubmit:\n\n```bash\nFTF_TEAM_CONFIG=team_config.json python3 submit_flag.py 'FTF{{...}}'\n```\n",
             encoding="utf-8",

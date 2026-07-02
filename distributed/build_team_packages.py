@@ -14,7 +14,18 @@ CONFIG_DIR = BASE_DIR / "configs"
 OUTPUT_DIR = BASE_DIR / "generated" / "team_packages"
 TEAMS_PATH = CONFIG_DIR / "teams.json"
 DB_PATH = BASE_DIR / "data" / "distributed_admin.sqlite3"
-SERVICE_CATALOG = {"default", "token", "shop"}
+SERVICE_CATALOG = {
+    "default",
+    "token",
+    "shop",
+    "memo",
+    "archive",
+    "vault",
+    "cipher",
+    "proxy",
+    "waf",
+    "supply",
+}
 ROUND_SECONDS = int(os.environ.get("FTF_ROUND_SECONDS", "300"))
 HEARTBEAT_INTERVAL_SECONDS = int(os.environ.get("FTF_TEAM_HEARTBEAT_INTERVAL_SECONDS", "30"))
 ADMIN_TIMEOUT_SECONDS = int(os.environ.get("FTF_TEAM_ADMIN_TIMEOUT_SECONDS", "3"))

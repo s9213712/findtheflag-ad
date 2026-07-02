@@ -51,7 +51,18 @@ python3 build_team_packages.py
 
 ```json
 {
-  "services": ["default", "token", "shop"]
+  "services": [
+    "default",
+    "token",
+    "shop",
+    "memo",
+    "archive",
+    "vault",
+    "cipher",
+    "proxy",
+    "waf",
+    "supply"
+  ]
 }
 ```
 
@@ -94,7 +105,30 @@ http://127.0.0.1:9100
 - Checker 成功連到隊伍並取回正確 flag 會給 availability/integrity 分
 - `/admin/penalties` 可手動登錄違規扣分
 - `/admin/export` 可匯出賽後 JSON
-- 目前服務：`default`, `token`, `shop`
+- 目前服務：`default`, `token`, `shop`, `memo`, `archive`, `vault`, `cipher`, `proxy`, `waf`, `supply`
+
+## Challenge Families
+
+這些服務是安全靶場化的 toy implementations，用來練 A/D hardening，不是對真實產品的 exploit：
+
+- `default`：預設帳密
+- `token`：未簽章角色 token
+- `shop`：商業邏輯/折扣下溢
+- `memo`：SQL injection 資料外洩
+- `archive`：路徑 canonicalization / encoded traversal
+- `vault`：可預測 recovery code
+- `cipher`：加密但未驗證的可竄改 session
+- `proxy`：SSRF / allowlist parser confusion
+- `waf`：WAF 與後端 duplicate parameter precedence 差異
+- `supply`：供應鏈 manifest 簽章未涵蓋 trust-critical 欄位
+
+設計參考：
+
+- ENOWARS 類服務/checker 分離、put/get flag 概念
+- DEF CON CTF 類 Attack-Defense「防守自己的服務，同時打別隊服務」模式
+- 近期公開研究中的 WAF parser discrepancy 類型
+- 近期 supply-chain incident 常見的 manifest、workflow、package trust 邊界
+- hackme_web 分支中大量存在的檔案分享、路徑解析、代理轉發、AI agent/tool boundary 類風險面，已抽象成靶場題型
 
 ## Submit Flags
 
@@ -118,7 +152,6 @@ Content-Type: application/json
 
 ## Next Implementation Steps
 
-- 搬入更多服務題目
 - 增加 team-local hardening UI
 - 把 team server package 打包成發給各隊的壓縮檔
 - 加 live network allowlist / allowed target ports documentation

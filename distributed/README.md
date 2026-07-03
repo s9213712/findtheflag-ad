@@ -109,7 +109,10 @@ http://127.0.0.1:9100
 - 攻擊方提交 flag 時，admin 比對 victim 回報值
 - 同一 attacker/victim/service/round 只計一次
 - Checker 成功連到隊伍並取回正確 flag 會給 availability/integrity 分
-- `/admin/penalties` 可手動登錄違規扣分
+- Team server/web 在 live 階段 unreachable 時，每 10 分鐘自動扣 10 分
+- `/admin/penalties` 可手動登錄違規扣分、admin attack warning、host/file-control warning
+- Admin page/API attack 第一次警告，第二次直接出局
+- 以 path traversal 等方式控制對方主機或伺服器檔案，登錄 warning；嚴重或重複可由主持人加罰或出局
 - `/admin/export` 可匯出賽後 JSON
 - 目前服務：`default`, `token`, `shop`, `memo`, `archive`, `vault`, `cipher`, `proxy`, `waf`, `supply`, `edge`, `media`, `agent`, `saml`, `hook`, `ledger`
 

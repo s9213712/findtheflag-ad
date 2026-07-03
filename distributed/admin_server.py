@@ -127,6 +127,8 @@ DEFAULT_SCORING = {
     "integrity_points": 2,
     "admin_access_penalty": 15,
     "infra_attack_penalty": 50,
+    "server_down_penalty_points": 10,
+    "server_down_penalty_window_seconds": 600,
     "checker_timeout_seconds": int(os.environ.get("FTF_CHECKER_TIMEOUT_SECONDS", "3")),
 }
 
@@ -371,6 +373,26 @@ def init_db() -> None:
                 points INTEGER NOT NULL,
                 created_at REAL NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS server_down_penalties (
+                team TEXT NOT NULL,
+                window INTEGER NOT NULL,
+                points INTEGER NOT NULL,
+                created_at REAL NOT NULL,
+                PRIMARY KEY (team, window)
+            );
+            CREATE TABLE IF NOT EXISTS violation_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                team TEXT NOT NULL,
+                kind TEXT NOT NULL,
+                severity TEXT NOT NULL,
+                note TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS disqualifications (
+                team TEXT PRIMARY KEY,
+                reason TEXT NOT NULL,
+                created_at REAL NOT NULL
+            );
             """
         )
         conn.execute("INSERT OR IGNORE INTO settings(key, value) VALUES ('phase', 'setup')")
@@ -474,12 +496,64 @@ def parse_flag(flag: str) -> tuple[str, str, int] | None:
     return victim, service, int(round_raw)
 
 
+def disqualified_teams() -> dict[str, sqlite3.Row]:
+    with db() as conn:
+        rows = conn.execute("SELECT team, reason, created_at FROM disqualifications").fetchall()
+    return {row["team"]: row for row in rows}
+
+
+def is_disqualified(team: str) -> bool:
+    return team in disqualified_teams()
+
+
+def disqualify_team(team: str, reason: str) -> None:
+    with DB_LOCK, db() as conn:
+        conn.execute(
+            """
+            INSERT INTO disqualifications(team, reason, created_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(team) DO UPDATE SET reason = excluded.reason, created_at = excluded.created_at
+            """,
+            (team, reason, now()),
+        )
+
+
+def record_violation(team: str, kind: str, note: str, severity: str = "warning") -> int:
+    with DB_LOCK, db() as conn:
+        conn.execute(
+            "INSERT INTO violation_events(team, kind, severity, note, created_at) VALUES (?, ?, ?, ?, ?)",
+            (team, kind, severity, note, now()),
+        )
+        count = conn.execute(
+            "SELECT COUNT(*) FROM violation_events WHERE team = ? AND kind = ?",
+            (team, kind),
+        ).fetchone()[0]
+    if kind == "admin_attack" and count >= 2:
+        disqualify_team(team, "second admin-page attack")
+    return int(count)
+
+
+def rule_status(team: str) -> dict[str, Any]:
+    dq = disqualified_teams().get(team)
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT kind, COUNT(*) AS count FROM violation_events WHERE team = ? GROUP BY kind",
+            (team,),
+        ).fetchall()
+    return {
+        "disqualified": bool(dq),
+        "disqualification_reason": dq["reason"] if dq else "",
+        "violations": {row["kind"]: int(row["count"]) for row in rows},
+    }
+
+
 def scoreboard() -> list[dict[str, Any]]:
     with db() as conn:
         attack_rows = conn.execute("SELECT attacker, COALESCE(SUM(points), 0) AS points FROM submissions GROUP BY attacker").fetchall()
         availability_rows = conn.execute("SELECT team, COALESCE(SUM(points), 0) AS points FROM availability_scores GROUP BY team").fetchall()
         integrity_rows = conn.execute("SELECT team, COALESCE(SUM(points), 0) AS points FROM integrity_scores GROUP BY team").fetchall()
         penalty_rows = conn.execute("SELECT team, COALESCE(SUM(points), 0) AS points FROM penalties GROUP BY team").fetchall()
+    dq = disqualified_teams()
     attack = {row["attacker"]: int(row["points"]) for row in attack_rows}
     availability = {row["team"]: int(row["points"]) for row in availability_rows}
     integrity = {row["team"]: int(row["points"]) for row in integrity_rows}
@@ -495,10 +569,12 @@ def scoreboard() -> list[dict[str, Any]]:
             "integrity": integrity.get(team, 0),
             "penalty": penalties.get(team, 0),
             "connected": connected,
+            "disqualified": team in dq,
+            "disqualification_reason": dq[team]["reason"] if team in dq else "",
         }
         row["total"] = row["attack"] + row["availability"] + row["integrity"] - row["penalty"]
         rows.append(row)
-    return sorted(rows, key=lambda item: item["total"], reverse=True)
+    return sorted(rows, key=lambda item: (item["disqualified"], -item["total"], item["team"]))
 
 
 def reset_match_state() -> None:
@@ -509,12 +585,45 @@ def reset_match_state() -> None:
         conn.execute("DELETE FROM availability_scores")
         conn.execute("DELETE FROM integrity_scores")
         conn.execute("DELETE FROM penalties")
+        conn.execute("DELETE FROM server_down_penalties")
+        conn.execute("DELETE FROM violation_events")
+        conn.execute("DELETE FROM disqualifications")
         conn.execute("INSERT INTO settings(key, value) VALUES ('phase', 'hardening') ON CONFLICT(key) DO UPDATE SET value = 'hardening'")
 
 
 def last_heartbeat(team: str) -> sqlite3.Row | None:
     with db() as conn:
         return conn.execute("SELECT * FROM heartbeats WHERE team = ?", (team,)).fetchone()
+
+
+def record_server_down_penalties() -> None:
+    if phase() != "live":
+        return
+    scoring = scoring_config()
+    window_seconds = max(60, int(scoring.get("server_down_penalty_window_seconds", 600)))
+    points = int(scoring.get("server_down_penalty_points", 10))
+    if points <= 0:
+        return
+    window = int(now() // window_seconds)
+    current = now()
+    dq = set(disqualified_teams())
+    with DB_LOCK, db() as conn:
+        for team in teams():
+            if team in dq:
+                continue
+            heartbeat = conn.execute("SELECT received_at FROM heartbeats WHERE team = ?", (team,)).fetchone()
+            connected = bool(heartbeat and current - heartbeat["received_at"] <= HEARTBEAT_TIMEOUT_SECONDS)
+            if connected:
+                continue
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO server_down_penalties(team, window, points, created_at) VALUES (?, ?, ?, ?)",
+                (team, window, points, current),
+            )
+            if cursor.rowcount:
+                conn.execute(
+                    "INSERT INTO penalties(team, reason, points, created_at) VALUES (?, ?, ?, ?)",
+                    (team, f"server down or unreachable during live window {window}", points, current),
+                )
 
 
 def run_checker(team: str, public_base_url: str, round_no: int) -> None:
@@ -582,6 +691,7 @@ def checker_loop() -> None:
                     heartbeat = last_heartbeat(team)
                     public_base_url = str(heartbeat["public_base_url"]) if heartbeat else cfg.get("public_base_url", "")
                     run_checker(team, public_base_url, round_no)
+                record_server_down_penalties()
         except Exception as exc:
             print(f"checker error: {exc}")
         time.sleep(CHECKER_INTERVAL_SECONDS)
@@ -770,9 +880,9 @@ def setup_guide_page(message: str = "") -> tuple[int, str, str]:
 
 def dashboard_page() -> tuple[int, str, str]:
     rows = "".join(
-        f"<tr><td>{esc(row['team'])}</td><td>{row['attack']}</td><td>{row['availability']}</td><td>{row['integrity']}</td><td>{row['penalty']}</td><td><strong>{row['total']}</strong></td><td class=\"{'ok' if row['connected'] else 'bad'}\">{'connected' if row['connected'] else 'missing'}</td></tr>"
+        f"<tr><td>{esc(row['team'])}</td><td>{row['attack']}</td><td>{row['availability']}</td><td>{row['integrity']}</td><td>{row['penalty']}</td><td><strong>{row['total']}</strong></td><td class=\"{'bad' if row['disqualified'] else 'ok'}\">{'DQ: ' + esc(row['disqualification_reason']) if row['disqualified'] else 'active'}</td><td class=\"{'ok' if row['connected'] else 'bad'}\">{'connected' if row['connected'] else 'missing'}</td></tr>"
         for row in scoreboard()
-    ) or "<tr><td colspan='7' class='empty'>No teams yet. Start with Setup Guide or Teams.</td></tr>"
+    ) or "<tr><td colspan='8' class='empty'>No teams yet. Start with Setup Guide or Teams.</td></tr>"
     progress = setup_progress()
     return page(
         "Dashboard",
@@ -800,14 +910,14 @@ def dashboard_page() -> tuple[int, str, str]:
           <p>Clears heartbeats, flag reports, submissions, availability, integrity, and penalties; phase returns to hardening.</p>
         </div>
         <h2>Scoreboard</h2>
-        <table><thead><tr><th>Team</th><th>Attack</th><th>Availability</th><th>Integrity</th><th>Penalty</th><th>Total</th><th>Heartbeat</th></tr></thead><tbody>{rows}</tbody></table>
+        <table><thead><tr><th>Team</th><th>Attack</th><th>Availability</th><th>Integrity</th><th>Penalty</th><th>Total</th><th>Rule Status</th><th>Heartbeat</th></tr></thead><tbody>{rows}</tbody></table>
         """,
     )
 
 
 def public_scoreboard_page() -> tuple[int, str, str]:
     rows = "".join(
-        f"<tr><td>{esc(row['team'])}</td><td>{row['attack']}</td><td>{row['availability']}</td><td>{row['integrity']}</td><td>{row['penalty']}</td><td><strong>{row['total']}</strong></td><td class=\"{'ok' if row['connected'] else 'bad'}\">{'connected' if row['connected'] else 'missing'}</td></tr>"
+        f"<tr><td>{esc(row['team'])}</td><td>{row['attack']}</td><td>{row['availability']}</td><td>{row['integrity']}</td><td>{row['penalty']}</td><td><strong>{row['total']}</strong></td><td class=\"{'bad' if row['disqualified'] else 'ok'}\">{'DQ' if row['disqualified'] else 'active'}</td><td class=\"{'ok' if row['connected'] else 'bad'}\">{'connected' if row['connected'] else 'missing'}</td></tr>"
         for row in scoreboard()
     )
     return page(
@@ -815,7 +925,7 @@ def public_scoreboard_page() -> tuple[int, str, str]:
         f"""
         <h1>Scoreboard</h1>
         <div class="notice">Phase: <strong>{esc(phase())}</strong> | Round: <strong>{current_round()}</strong> | Next flags in: <strong>{round_remaining()}s</strong></div>
-        <table><thead><tr><th>Team</th><th>Attack</th><th>Availability</th><th>Integrity</th><th>Penalty</th><th>Total</th><th>Heartbeat</th></tr></thead><tbody>{rows}</tbody></table>
+        <table><thead><tr><th>Team</th><th>Attack</th><th>Availability</th><th>Integrity</th><th>Penalty</th><th>Total</th><th>Rule Status</th><th>Heartbeat</th></tr></thead><tbody>{rows}</tbody></table>
         <script>setTimeout(() => location.reload(), 5000);</script>
         """,
     )
@@ -869,6 +979,9 @@ def team_home_page(team: str, message: str = "") -> tuple[int, str, str]:
     hb = last_heartbeat(team)
     hb_text = "never" if not hb else f"{int(now() - hb['received_at'])}s ago"
     score = team_score(team)
+    rules = rule_status(team)
+    admin_warnings = rules["violations"].get("admin_attack", 0)
+    infra_warnings = rules["violations"].get("infra_file_control", 0)
     services = "".join(f"<span class='pill'>{esc(service)}</span>" for service in selected_services())
     return page(
         "Team Home",
@@ -883,6 +996,7 @@ def team_home_page(team: str, message: str = "") -> tuple[int, str, str]:
           <div class="card"><h2>Integrity</h2><p><strong>{score['integrity']}</strong></p></div>
           <div class="card"><h2>Penalty</h2><p><strong>-{score['penalty']}</strong></p></div>
           <div class="card"><h2>Heartbeat</h2><p class="{'ok' if score['connected'] else 'bad'}">{'connected' if score['connected'] else 'missing'}</p><p class="muted">{esc(hb_text)}</p></div>
+          <div class="card"><h2>Rule Status</h2><p class="{'bad' if rules['disqualified'] else 'ok'}">{'DQ: ' + esc(rules['disqualification_reason']) if rules['disqualified'] else 'active'}</p><p class="muted">Admin warnings: {admin_warnings}; Infra warnings: {infra_warnings}</p></div>
         </div>
         <div class="card">
           <h2>Submit Stolen Flag</h2>
@@ -1053,16 +1167,29 @@ def penalties_page(message: str = "") -> tuple[int, str, str]:
     team_options = "".join(f"<option value='{esc(team)}'>{esc(team)}</option>" for team in teams())
     with db() as conn:
         rows = conn.execute("SELECT team, reason, points, created_at FROM penalties ORDER BY created_at DESC LIMIT 200").fetchall()
+        violation_rows = conn.execute("SELECT team, kind, severity, note, created_at FROM violation_events ORDER BY created_at DESC LIMIT 200").fetchall()
+        dq_rows = conn.execute("SELECT team, reason, created_at FROM disqualifications ORDER BY created_at DESC").fetchall()
     body_rows = "".join(
         f"<tr><td>{esc(row['team'])}</td><td>{esc(row['reason'])}</td><td>-{row['points']}</td><td>{time.strftime('%H:%M:%S', time.localtime(row['created_at']))}</td></tr>"
         for row in rows
     ) or "<tr><td colspan='4' class='empty'>No penalties. Manual penalties for admin/infrastructure attacks will appear here.</td></tr>"
+    violation_body = "".join(
+        f"<tr><td>{esc(row['team'])}</td><td>{esc(row['kind'])}</td><td>{esc(row['severity'])}</td><td>{esc(row['note'])}</td><td>{time.strftime('%H:%M:%S', time.localtime(row['created_at']))}</td></tr>"
+        for row in violation_rows
+    ) or "<tr><td colspan='5' class='empty'>No rule warnings yet.</td></tr>"
+    dq_body = "".join(
+        f"<tr><td>{esc(row['team'])}</td><td>{esc(row['reason'])}</td><td>{time.strftime('%H:%M:%S', time.localtime(row['created_at']))}</td></tr>"
+        for row in dq_rows
+    ) or "<tr><td colspan='3' class='empty'>No disqualified teams.</td></tr>"
     return page(
         "Penalties",
         f"""
         <h1>Penalties</h1>
+        <div class="notice">Rules: server down/unreachable during live is -{scoring_config()['server_down_penalty_points']} every {scoring_config()['server_down_penalty_window_seconds']} seconds. Admin-page attack: first warning, second DQ. Host/file-control attack: warning.</div>
         <div class="card">
+          <h2>Manual Score Penalty</h2>
           <form method="post" action="/admin/penalties" class="row">
+            <input type="hidden" name="action" value="penalty">
             <div><label>Team</label><select name="team">{team_options}</select></div>
             <div><label>Points</label><input type="number" min="1" name="points" value="{scoring_config()['infra_attack_penalty']}"></div>
             <div><label>Reason</label><input name="reason" placeholder="admin page attack"></div>
@@ -1070,6 +1197,24 @@ def penalties_page(message: str = "") -> tuple[int, str, str]:
           </form>
           {'<p class="ok">' + esc(message) + '</p>' if message else ''}
         </div>
+        <div class="card">
+          <h2>Rule Warning / DQ</h2>
+          <form method="post" action="/admin/penalties" class="row">
+            <input type="hidden" name="action" value="violation">
+            <div><label>Team</label><select name="team">{team_options}</select></div>
+            <div><label>Violation</label><select name="kind">
+              <option value="admin_attack">Admin page/API attack</option>
+              <option value="infra_file_control">Path traversal / host file-control attack</option>
+            </select></div>
+            <div><label>Note</label><input name="note" placeholder="evidence or URL"></div>
+            <div><button>Record warning</button></div>
+          </form>
+        </div>
+        <h2>Disqualifications</h2>
+        <table><thead><tr><th>Team</th><th>Reason</th><th>Time</th></tr></thead><tbody>{dq_body}</tbody></table>
+        <h2>Rule Warnings</h2>
+        <table><thead><tr><th>Team</th><th>Kind</th><th>Severity</th><th>Note</th><th>Time</th></tr></thead><tbody>{violation_body}</tbody></table>
+        <h2>Score Penalties</h2>
         <table><thead><tr><th>Team</th><th>Reason</th><th>Points</th><th>Time</th></tr></thead><tbody>{body_rows}</tbody></table>
         """,
     )
@@ -1080,6 +1225,9 @@ def export_state() -> dict[str, Any]:
         flag_rows = conn.execute("SELECT team, service, round, flag, received_at FROM flag_reports ORDER BY round, team, service").fetchall()
         submission_rows = conn.execute("SELECT attacker, victim, service, round, flag, points, created_at FROM submissions ORDER BY created_at").fetchall()
         penalty_rows = conn.execute("SELECT team, reason, points, created_at FROM penalties ORDER BY created_at").fetchall()
+        server_down_rows = conn.execute("SELECT team, window, points, created_at FROM server_down_penalties ORDER BY created_at").fetchall()
+        violation_rows = conn.execute("SELECT team, kind, severity, note, created_at FROM violation_events ORDER BY created_at").fetchall()
+        dq_rows = conn.execute("SELECT team, reason, created_at FROM disqualifications ORDER BY created_at").fetchall()
     return {
         "exported_at": int(now()),
         "phase": phase(),
@@ -1090,6 +1238,9 @@ def export_state() -> dict[str, Any]:
         "flags": [dict(row) for row in flag_rows],
         "submissions": [dict(row) for row in submission_rows],
         "penalties": [dict(row) for row in penalty_rows],
+        "server_down_penalties": [dict(row) for row in server_down_rows],
+        "violations": [dict(row) for row in violation_rows],
+        "disqualifications": [dict(row) for row in dq_rows],
     }
 
 
@@ -1107,6 +1258,8 @@ def export_page() -> tuple[int, str, str]:
           <div class="card"><h2>Services</h2><p><strong>{len(state['services'])}</strong></p></div>
           <div class="card"><h2>Flags</h2><p><strong>{len(state['flags'])}</strong></p></div>
           <div class="card"><h2>Submissions</h2><p><strong>{len(state['submissions'])}</strong></p></div>
+          <div class="card"><h2>Warnings</h2><p><strong>{len(state['violations'])}</strong></p></div>
+          <div class="card"><h2>Disqualified</h2><p><strong>{len(state['disqualifications'])}</strong></p></div>
         </div>
         <div class="card">
           <h2>Download</h2>
@@ -1209,6 +1362,8 @@ def submit_flag(attacker: str, flag: str) -> tuple[int, dict[str, Any]]:
     victim, service, round_no = parsed
     if attacker not in teams():
         return 403, {"ok": False, "message": "unknown attacker"}
+    if is_disqualified(attacker):
+        return 403, {"ok": False, "message": "team is disqualified and cannot submit flags"}
     if victim not in teams() or service not in selected_services():
         return 400, {"ok": False, "message": "unknown victim or service"}
     if victim == attacker:
@@ -1304,9 +1459,17 @@ class AdminHandler(BaseHTTPRequestHandler):
         accept = self.headers.get("Accept", "")
         return query.get("format", [""])[0] == "json" or "application/json" in accept
 
-    def require_admin(self) -> bool:
+    def require_admin(self, path: str = "/admin") -> bool:
         if self.is_admin():
             return True
+        team = self.current_team()
+        if team:
+            count = record_violation(team, "admin_attack", f"accessed {path}")
+            if count >= 2:
+                self.respond(error_page("Disqualified", "Your team accessed the admin area a second time and is disqualified.", HTTPStatus.FORBIDDEN, "/team", "Back to team home", area="team"))
+            else:
+                self.respond(error_page("Admin Area Warning", "This is the admin console. Your team has received one warning; a second admin-page/API attack causes disqualification.", HTTPStatus.FORBIDDEN, "/team", "Back to team home", area="team"))
+            return False
         self.respond(login_page("Login required."))
         return False
 
@@ -1351,7 +1514,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             return self.respond(error_page("Team page not found", "Use Team Home or Submit Flag to continue.", HTTPStatus.NOT_FOUND, "/team", "Back to team home", area="team"))
         if path == "/admin/login":
             return self.respond(login_page())
-        if path.startswith("/admin") and not self.require_admin():
+        if path.startswith("/admin") and not self.require_admin(path):
             return
         if path == "/admin":
             return self.respond(dashboard_page())
@@ -1421,7 +1584,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             payload = json.loads(body.decode() or "{}")
             status, response = submit_flag(attacker, str(payload.get("flag", "")))
             return self.send_json(status, response)
-        if path.startswith("/admin") and not self.require_admin():
+        if path.startswith("/admin") and not self.require_admin(path):
             return
         if path == "/admin/phase":
             payload = parse_body(headers, body)
@@ -1448,6 +1611,17 @@ class AdminHandler(BaseHTTPRequestHandler):
             team = str(payload.get("team", ""))
             if team not in teams():
                 return self.respond(error_page("Unknown team", "Create the team first, then add a manual penalty.", HTTPStatus.BAD_REQUEST, "/admin/penalties", "Back to penalties"))
+            action = str(payload.get("action", "penalty"))
+            if action == "violation":
+                kind = str(payload.get("kind", ""))
+                if kind not in {"admin_attack", "infra_file_control"}:
+                    return self.respond(error_page("Bad violation", "Choose admin attack or host/file-control attack.", HTTPStatus.BAD_REQUEST, "/admin/penalties", "Back to penalties"))
+                default_note = "admin page/API attack" if kind == "admin_attack" else "path traversal or host file-control attack"
+                note = str(payload.get("note", "")).strip() or default_note
+                count = record_violation(team, kind, note)
+                if kind == "admin_attack" and count >= 2:
+                    return self.respond(penalties_page(f"{team} disqualified for second admin-page attack."))
+                return self.respond(penalties_page(f"Warning recorded for {team}."))
             try:
                 points = max(1, int(str(payload.get("points", "0"))))
             except ValueError:

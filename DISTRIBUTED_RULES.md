@@ -276,8 +276,10 @@ Integrity:
   service returns correct own current flag through legal checker path: +2
 
 Penalties:
-  admin page/API attack: -15
-  infrastructure attack: -50 or disqualification
+  team server/web unreachable during live: -10 every 10 minutes
+  admin page/API attack: first warning, second incident = disqualification
+  path traversal or host/file-control attack against another team's computer: warning
+  infrastructure attack: warning, penalty, or disqualification at organizer discretion
   team identity tampering: -50 or disqualification
 ```
 
@@ -360,11 +362,24 @@ all services availability = 0 for that checker round
 all services integrity = 0 for that checker round
 heartbeat missed
 flag report missing
+server-down penalty = -10 every 10 minutes during live
 ```
 
-No extra fixed penalty is needed unless crash is caused by illegal behavior. The team naturally loses points every round it is down.
+The admin server automatically records the 10-minute server-down penalty during live phase. Teams also naturally lose availability and integrity points while down.
 
 ## Anti-Abuse Rules
+
+### Admin Page / API Attack
+
+- First identified admin-page or admin-API attack: warning.
+- Second identified admin-page or admin-API attack: immediate disqualification.
+- If a logged-in team account browses to `/admin/*`, the system records the warning automatically. Organizers can also record the incident manually from `/admin/penalties`.
+
+### Host / File-Control Attack
+
+- Attacks that use path traversal, shell/file-write primitives, or similar techniques to control another team's host or server files are outside the service-level flag game.
+- First confirmed incident: warning.
+- Serious or repeated incidents may receive manual penalties or disqualification at organizer discretion.
 
 ### Cannot Delete Flags
 

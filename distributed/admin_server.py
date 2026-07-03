@@ -232,6 +232,7 @@ def generate_team_configs() -> None:
 def team_starter_html(team: str, cfg: dict[str, Any]) -> str:
     public_url = str(cfg["public_base_url"])
     admin_url = str(cfg["admin_url"])
+    submit_url = admin_url.rstrip("/") + "/team/login"
     return f"""<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -246,6 +247,7 @@ def team_starter_html(team: str, cfg: dict[str, Any]) -> str:
     code,pre {{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }}
     pre {{ background:#101827; color:#d8f3ff; padding:12px; border-radius:6px; overflow:auto; }}
     a.button {{ display:inline-flex; background:#176b87; color:white; text-decoration:none; border-radius:6px; padding:9px 12px; font-weight:700; }}
+    a.secondary {{ background:#e5edf2; color:#173447; }}
   </style>
 </head>
 <body>
@@ -254,7 +256,10 @@ def team_starter_html(team: str, cfg: dict[str, Any]) -> str:
     <div class="card">
       <h1>{esc(team)} Initialization</h1>
       <p>This page is the local handoff page for the hardening window.</p>
-      <p><a class="button" href="{esc(public_url)}">Open Team Server</a></p>
+      <p>
+        <a class="button" href="{esc(public_url)}">Open Team Server</a>
+        <a class="button secondary" href="{esc(submit_url)}">Submit Flags</a>
+      </p>
     </div>
     <div class="card">
       <h2>Start Server</h2>
@@ -267,6 +272,9 @@ def team_starter_html(team: str, cfg: dict[str, Any]) -> str:
     </div>
     <div class="card">
       <h2>Submit During Live</h2>
+      <p>Use the web submit portal:</p>
+      <pre>{esc(submit_url)}</pre>
+      <p>Backup CLI path:</p>
       <pre>FTF_TEAM_CONFIG=team_config.json python3 submit_flag.py 'FTF{{...}}'</pre>
     </div>
   </main>
@@ -292,11 +300,7 @@ def generate_team_packages() -> None:
         (package_dir / "public").mkdir(exist_ok=True)
         (package_dir / "public" / "index.html").write_text(team_starter_html(team, cfg), encoding="utf-8")
         (package_dir / "README.md").write_text(
-            f"# Team Package: {team}\n\nEnabled services:\n\n{chr(10).join('- ' + service for service in cfg.get('services', ['default']))}\n\nRun:\n\n```bash\nFTF_TEAM_CONFIG=team_config.json python3 team_server.py\n```\n\nTeam URL:\n\n```text\n{cfg['public_base_url']}\n```\n\nSubmit:\n\n```bash\nFTF_TEAM_CONFIG=team_config.json python3 submit_flag.py 'FTF{{...}}'\n```\n",
-            encoding="utf-8",
-        )
-        (package_dir / "public" / "index.html").write_text(
-            f"<!doctype html><meta charset='utf-8'><title>{esc(team)} package</title><h1>{esc(team)} Team Package</h1><p>Start:</p><pre>FTF_TEAM_CONFIG=team_config.json python3 team_server.py</pre><p>Team URL: <code>{esc(cfg['public_base_url'])}</code></p>",
+            f"# Team Package: {team}\n\nEnabled services:\n\n{chr(10).join('- ' + service for service in cfg.get('services', ['default']))}\n\nRun:\n\n```bash\nFTF_TEAM_CONFIG=team_config.json python3 team_server.py\n```\n\nTeam URL:\n\n```text\n{cfg['public_base_url']}\n```\n\nWeb submit portal:\n\n```text\n{cfg['admin_url'].rstrip('/')}/team/login\n```\n\nSubmit with backup CLI:\n\n```bash\nFTF_TEAM_CONFIG=team_config.json python3 submit_flag.py 'FTF{{...}}'\n```\n",
             encoding="utf-8",
         )
 
@@ -428,6 +432,25 @@ def valid_session(cookie: str) -> bool:
     body, sig = cookie.rsplit(".", 1)
     expected = hmac.new(ADMIN_PASSWORD.encode(), body.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(sig, expected)
+
+
+def sign_team_session(team: str) -> str:
+    body = f"{team}:{int(now())}"
+    sig = hmac.new(ADMIN_PASSWORD.encode(), f"team:{body}".encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def valid_team_session(cookie: str) -> str | None:
+    if "." not in cookie:
+        return None
+    body, sig = cookie.rsplit(".", 1)
+    if ":" not in body:
+        return None
+    team, _issued = body.split(":", 1)
+    expected = hmac.new(ADMIN_PASSWORD.encode(), f"team:{body}".encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    return team if team in teams() else None
 
 
 def verify_team_signature(team: str, raw_body: bytes, signature: str) -> bool:
@@ -564,7 +587,28 @@ def checker_loop() -> None:
         time.sleep(CHECKER_INTERVAL_SECONDS)
 
 
-def page(title: str, body: str, status: int = 200) -> tuple[int, str, str]:
+def page(title: str, body: str, status: int = 200, area: str = "admin") -> tuple[int, str, str]:
+    if area == "team":
+        nav = """
+      <a href="/team">Team Home</a>
+      <a href="/team/submit">Submit Flag</a>
+      <a href="/scoreboard">Scoreboard</a>
+      <a href="/team/logout">Logout</a>
+        """
+        brand = "FindTheFlag Team Portal"
+    else:
+        nav = """
+      <a href="/admin">Dashboard</a>
+      <a href="/admin/setup">Setup Guide</a>
+      <a href="/admin/teams">Teams</a>
+      <a href="/admin/flags">Flags</a>
+      <a href="/admin/submissions">Submissions</a>
+      <a href="/admin/scoring">Scoring</a>
+      <a href="/admin/penalties">Penalties</a>
+      <a href="/admin/export">Export</a>
+      <a href="/scoreboard">Public Scoreboard</a>
+        """
+        brand = "Distributed FindTheFlag Admin"
     doc = f"""<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -604,17 +648,9 @@ def page(title: str, body: str, status: int = 200) -> tuple[int, str, str]:
 </head>
 <body>
   <header>
-    <strong>Distributed FindTheFlag Admin</strong>
+    <strong>{esc(brand)}</strong>
     <nav>
-      <a href="/admin">Dashboard</a>
-      <a href="/admin/setup">Setup Guide</a>
-      <a href="/admin/teams">Teams</a>
-      <a href="/admin/flags">Flags</a>
-      <a href="/admin/submissions">Submissions</a>
-      <a href="/admin/scoring">Scoring</a>
-      <a href="/admin/penalties">Penalties</a>
-      <a href="/admin/export">Export</a>
-      <a href="/scoreboard">Public Scoreboard</a>
+      {nav}
     </nav>
   </header>
   <main>{body}</main>
@@ -640,7 +676,14 @@ def login_page(message: str = "") -> tuple[int, str, str]:
     )
 
 
-def error_page(title: str, message: str, status: int = 404, action_href: str = "/admin", action_label: str = "Back to dashboard") -> tuple[int, str, str]:
+def error_page(
+    title: str,
+    message: str,
+    status: int = 404,
+    action_href: str = "/admin",
+    action_label: str = "Back to dashboard",
+    area: str = "admin",
+) -> tuple[int, str, str]:
     return page(
         title,
         f"""
@@ -651,6 +694,7 @@ def error_page(title: str, message: str, status: int = 404, action_href: str = "
         </div>
         """,
         status,
+        area=area,
     )
 
 
@@ -777,6 +821,110 @@ def public_scoreboard_page() -> tuple[int, str, str]:
     )
 
 
+def team_login_page(message: str = "") -> tuple[int, str, str]:
+    team_options = "".join(f"<option value='{esc(team)}'>{esc(team)}</option>" for team in teams())
+    if not team_options:
+        team_options = "<option value=''>No teams configured yet</option>"
+    return page(
+        "Team Login",
+        f"""
+        <h1>Team Login</h1>
+        <div class="notice">Use the Team ID and Team Secret from your team package. This portal is where teams submit stolen flags during live phase.</div>
+        <div class="card">
+          <form method="post" action="/team/login">
+            <label>Team</label>
+            <select name="team">{team_options}</select>
+            <label>Team Secret</label>
+            <input type="password" name="secret" autocomplete="current-password">
+            <button>Login</button>
+          </form>
+          {'<p class="bad">' + esc(message) + '</p>' if message else ''}
+        </div>
+        """,
+        area="team",
+    )
+
+
+def team_score(team: str) -> dict[str, Any]:
+    for row in scoreboard():
+        if row["team"] == team:
+            return row
+    return {"team": team, "attack": 0, "availability": 0, "integrity": 0, "penalty": 0, "connected": False, "total": 0}
+
+
+def team_recent_submissions(team: str) -> str:
+    with db() as conn:
+        rows = conn.execute(
+            "SELECT victim, service, round, flag, points, created_at FROM submissions WHERE attacker = ? ORDER BY created_at DESC LIMIT 20",
+            (team,),
+        ).fetchall()
+    return "".join(
+        f"<tr><td>{esc(row['victim'])}</td><td>{esc(row['service'])}</td><td>{row['round']}</td><td><code>{esc(row['flag'])}</code></td><td>+{row['points']}</td><td>{time.strftime('%H:%M:%S', time.localtime(row['created_at']))}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='6' class='empty'>No accepted submissions yet.</td></tr>"
+
+
+def team_home_page(team: str, message: str = "") -> tuple[int, str, str]:
+    cfg = teams()[team]
+    hb = last_heartbeat(team)
+    hb_text = "never" if not hb else f"{int(now() - hb['received_at'])}s ago"
+    score = team_score(team)
+    services = "".join(f"<span class='pill'>{esc(service)}</span>" for service in selected_services())
+    return page(
+        "Team Home",
+        f"""
+        <h1>Team {esc(team)}</h1>
+        <div class="notice">Phase: <strong>{esc(phase())}</strong> | Round: <strong>{current_round()}</strong> | Next flags in: <strong>{round_remaining()}s</strong></div>
+        {'<div class="notice ok">' + esc(message) + '</div>' if message else ''}
+        <div class="grid">
+          <div class="card"><h2>Total</h2><p><strong>{score['total']}</strong></p></div>
+          <div class="card"><h2>Attack</h2><p><strong>{score['attack']}</strong></p></div>
+          <div class="card"><h2>Availability</h2><p><strong>{score['availability']}</strong></p></div>
+          <div class="card"><h2>Integrity</h2><p><strong>{score['integrity']}</strong></p></div>
+          <div class="card"><h2>Penalty</h2><p><strong>-{score['penalty']}</strong></p></div>
+          <div class="card"><h2>Heartbeat</h2><p class="{'ok' if score['connected'] else 'bad'}">{'connected' if score['connected'] else 'missing'}</p><p class="muted">{esc(hb_text)}</p></div>
+        </div>
+        <div class="card">
+          <h2>Submit Stolen Flag</h2>
+          <form method="post" action="/team/submit" class="row">
+            <div style="flex:3 1 420px"><label>Flag</label><input name="flag" placeholder="FTF{{victim_service_round_digest}}"></div>
+            <div><button>Submit flag</button></div>
+          </form>
+          <p class="muted">Submissions only score during live phase. Self flags do not score.</p>
+        </div>
+        <div class="card">
+          <h2>Your Team Server</h2>
+          <p><a class="button" href="{esc(cfg.get('public_base_url', ''))}">Open own target</a> <a class="button secondary" href="/scoreboard">Open scoreboard</a></p>
+          <p>Enabled services: {services or '<span class="muted">No services selected.</span>'}</p>
+        </div>
+        <h2>Recent Accepted Submissions</h2>
+        <table><thead><tr><th>Victim</th><th>Service</th><th>Round</th><th>Flag</th><th>Points</th><th>Time</th></tr></thead><tbody>{team_recent_submissions(team)}</tbody></table>
+        """,
+        area="team",
+    )
+
+
+def team_submit_page(team: str, message: str = "", ok: bool = False) -> tuple[int, str, str]:
+    return page(
+        "Submit Flag",
+        f"""
+        <h1>Submit Flag</h1>
+        <div class="notice">Logged in as <strong>{esc(team)}</strong>. Paste a flag stolen from another team's service.</div>
+        {'<div class="notice ' + ('ok' if ok else 'bad') + '">' + esc(message) + '</div>' if message else ''}
+        <div class="card">
+          <form method="post" action="/team/submit">
+            <label>Stolen flag</label>
+            <input name="flag" placeholder="FTF{{victim_service_round_digest}}" autofocus>
+            <button>Submit flag</button>
+          </form>
+        </div>
+        <h2>Recent Accepted Submissions</h2>
+        <table><thead><tr><th>Victim</th><th>Service</th><th>Round</th><th>Flag</th><th>Points</th><th>Time</th></tr></thead><tbody>{team_recent_submissions(team)}</tbody></table>
+        """,
+        area="team",
+    )
+
+
 def teams_page() -> tuple[int, str, str]:
     rows = []
     enabled = set(selected_services())
@@ -823,7 +971,7 @@ def teams_page() -> tuple[int, str, str]:
         "Teams",
         f"""
         <h1>Teams</h1>
-        <div class="notice">Create teams first, choose the challenge services, then generate packages. Generated packages: <strong>{package_count}</strong>.</div>
+        <div class="notice">Create teams first, choose the challenge services, then generate packages. Give each team its Team ID and Team Secret; the same secret logs into <code>/team/login</code>. Generated packages: <strong>{package_count}</strong>.</div>
         <div class="card">
           <h2>Create Team</h2>
           <form method="post" action="/admin/teams" class="row">
@@ -1124,6 +1272,9 @@ class AdminHandler(BaseHTTPRequestHandler):
     def is_admin(self) -> bool:
         return valid_session(parse_cookies(self.headers.get("cookie")).get("admin_session", ""))
 
+    def current_team(self) -> str | None:
+        return valid_team_session(parse_cookies(self.headers.get("cookie")).get("team_session", ""))
+
     def respond(self, response: tuple[int, str, str]) -> None:
         status, content_type, text = response
         raw = text.encode("utf-8")
@@ -1159,11 +1310,18 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.respond(login_page("Login required."))
         return False
 
+    def require_team(self) -> str | None:
+        team = self.current_team()
+        if team:
+            return team
+        self.respond(team_login_page("Login required."))
+        return None
+
     def do_GET(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
         if path == "/":
-            return self.redirect("/admin")
+            return self.redirect("/team/login")
         if path == "/api/state":
             if self.wants_json(parsed):
                 return self.send_json(200, api_state())
@@ -1172,6 +1330,25 @@ class AdminHandler(BaseHTTPRequestHandler):
             return self.respond(api_landing_page())
         if path == "/scoreboard":
             return self.respond(public_scoreboard_page())
+        if path == "/team/login":
+            return self.respond(team_login_page())
+        if path == "/team/logout":
+            return self.redirect("/team/login", ["team_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"])
+        if path == "/team":
+            team = self.require_team()
+            if not team:
+                return
+            return self.respond(team_home_page(team))
+        if path == "/team/submit":
+            team = self.require_team()
+            if not team:
+                return
+            return self.respond(team_submit_page(team))
+        if path.startswith("/team"):
+            team = self.require_team()
+            if not team:
+                return
+            return self.respond(error_page("Team page not found", "Use Team Home or Submit Flag to continue.", HTTPStatus.NOT_FOUND, "/team", "Back to team home", area="team"))
         if path == "/admin/login":
             return self.respond(login_page())
         if path.startswith("/admin") and not self.require_admin():
@@ -1201,6 +1378,22 @@ class AdminHandler(BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/") or "/"
         body = self.read_body()
         headers = self.headers_map()
+        if path == "/team/login":
+            payload = parse_body(headers, body)
+            team = str(payload.get("team", "")).strip().lower()
+            secret = str(payload.get("secret", ""))
+            cfg = teams().get(team)
+            if cfg and hmac.compare_digest(secret, cfg["secret"]):
+                return self.redirect("/team", [f"team_session={sign_team_session(team)}; Path=/; HttpOnly; SameSite=Lax"])
+            return self.respond(team_login_page("Team or secret incorrect."))
+        if path == "/team/submit":
+            team = self.require_team()
+            if not team:
+                return
+            payload = parse_body(headers, body)
+            status, response = submit_flag(team, str(payload.get("flag", "")))
+            ok = bool(response.get("ok")) and status < 400
+            return self.respond(team_submit_page(team, str(response.get("message", "Submitted.")), ok=ok))
         if path == "/admin/login":
             payload = parse_body(headers, body)
             if hmac.compare_digest(str(payload.get("password", "")), ADMIN_PASSWORD):

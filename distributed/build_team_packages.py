@@ -64,6 +64,7 @@ def write_text(path: Path, content: str) -> None:
 def team_readme(team: str, config: dict[str, object]) -> str:
     public_url = str(config["public_base_url"])
     admin_url = str(config["admin_url"])
+    submit_url = admin_url.rstrip("/") + "/team/login"
     return f"""# Team Package: {team}
 
 這是 `{team}` 隊的初始化部署資料。不要把這包交給其他隊。
@@ -96,6 +97,14 @@ FTF_TEAM_CONFIG=team_config.json python3 team_server.py
 
 ## Submit A Flag During Live
 
+Web submit portal:
+
+```text
+{submit_url}
+```
+
+Backup CLI:
+
 ```bash
 FTF_TEAM_CONFIG=team_config.json python3 submit_flag.py 'FTF{{victim_service_round_digest}}'
 ```
@@ -113,6 +122,7 @@ FTF_TEAM_CONFIG=team_config.json python3 submit_flag.py 'FTF{{victim_service_rou
 def starter_html(team: str, config: dict[str, object]) -> str:
     public_url = str(config["public_base_url"])
     admin_url = str(config["admin_url"])
+    submit_url = admin_url.rstrip("/") + "/team/login"
     return f"""<!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -163,6 +173,10 @@ def starter_html(team: str, config: dict[str, object]) -> str:
       padding: 9px 12px;
       font-weight: 700;
     }}
+    a.secondary {{
+      background: #e5edf2;
+      color: #173447;
+    }}
   </style>
 </head>
 <body>
@@ -173,7 +187,10 @@ def starter_html(team: str, config: dict[str, object]) -> str:
     <div class="card">
       <h1>{team} Initialization</h1>
       <p>這頁是給隊伍 hardening 階段使用的起始資料。正式攻防入口是你啟動的 team server。</p>
-      <p><a class="button" href="{public_url}">Open Team Server</a></p>
+      <p>
+        <a class="button" href="{public_url}">Open Team Server</a>
+        <a class="button secondary" href="{submit_url}">Submit Flags</a>
+      </p>
     </div>
 
     <div class="card">
@@ -189,6 +206,9 @@ def starter_html(team: str, config: dict[str, object]) -> str:
 
     <div class="card">
       <h2>Submit During Live</h2>
+      <p>Web submit portal:</p>
+      <pre>{submit_url}</pre>
+      <p>Backup CLI:</p>
       <pre>FTF_TEAM_CONFIG=team_config.json python3 submit_flag.py 'FTF{{...}}'</pre>
     </div>
   </main>

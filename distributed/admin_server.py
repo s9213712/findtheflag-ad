@@ -584,6 +584,7 @@ def page(title: str, body: str, status: int = 200) -> tuple[int, str, str]:
     th,td {{ border-bottom:1px solid #d9e0e8; padding:9px 10px; text-align:left; font-size:14px; }}
     th {{ background:#edf3f7; }}
     input,select {{ width:100%; padding:9px; border:1px solid #b8c4d0; border-radius:6px; }}
+    input[type="checkbox"] {{ width:auto; }}
     label {{ display:block; font-weight:700; margin:10px 0 5px; }}
     button,.button {{ display:inline-flex; background:#176b87; color:white; border:0; border-radius:6px; padding:9px 12px; font-weight:700; text-decoration:none; cursor:pointer; }}
     .secondary {{ background:#e5edf2; color:#173447; }}
@@ -592,7 +593,13 @@ def page(title: str, body: str, status: int = 200) -> tuple[int, str, str]:
     .row > * {{ flex:1 1 160px; }}
     .ok {{ color:#247a45; font-weight:700; }}
     .bad {{ color:#b42318; font-weight:700; }}
-    code {{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }}
+    .muted {{ color:#637083; }}
+    .step {{ display:flex; gap:12px; align-items:flex-start; }}
+    .step-num {{ width:28px; height:28px; border-radius:50%; background:#176b87; color:white; display:inline-flex; align-items:center; justify-content:center; font-weight:800; flex:0 0 auto; }}
+    .pill {{ display:inline-flex; border:1px solid #cbd6df; border-radius:999px; padding:3px 8px; font-size:12px; background:#f7fafc; margin:2px; }}
+    .empty {{ color:#637083; padding:18px; text-align:center; }}
+    code,pre {{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }}
+    pre {{ background:#101827; color:#d8f3ff; padding:12px; border-radius:6px; overflow:auto; }}
   </style>
 </head>
 <body>
@@ -600,12 +607,14 @@ def page(title: str, body: str, status: int = 200) -> tuple[int, str, str]:
     <strong>Distributed FindTheFlag Admin</strong>
     <nav>
       <a href="/admin">Dashboard</a>
+      <a href="/admin/setup">Setup Guide</a>
       <a href="/admin/teams">Teams</a>
       <a href="/admin/flags">Flags</a>
       <a href="/admin/submissions">Submissions</a>
       <a href="/admin/scoring">Scoring</a>
       <a href="/admin/penalties">Penalties</a>
       <a href="/admin/export">Export</a>
+      <a href="/scoreboard">Public Scoreboard</a>
     </nav>
   </header>
   <main>{body}</main>
@@ -631,17 +640,108 @@ def login_page(message: str = "") -> tuple[int, str, str]:
     )
 
 
+def error_page(title: str, message: str, status: int = 404, action_href: str = "/admin", action_label: str = "Back to dashboard") -> tuple[int, str, str]:
+    return page(
+        title,
+        f"""
+        <h1>{esc(title)}</h1>
+        <div class="card">
+          <p>{esc(message)}</p>
+          <p><a class="button" href="{esc(action_href)}">{esc(action_label)}</a></p>
+        </div>
+        """,
+        status,
+    )
+
+
+def setup_progress() -> dict[str, Any]:
+    team_count = len(teams())
+    selected = selected_services()
+    package_dir = BASE_DIR / "generated" / "team_packages"
+    package_count = len([item for item in package_dir.iterdir() if item.is_dir()]) if package_dir.exists() else 0
+    return {
+        "team_count": team_count,
+        "selected_services": selected,
+        "package_count": package_count,
+        "phase": phase(),
+    }
+
+
+def setup_guide_page(message: str = "") -> tuple[int, str, str]:
+    progress = setup_progress()
+    team_ok = progress["team_count"] > 0
+    package_ok = progress["package_count"] >= progress["team_count"] > 0
+    service_pills = "".join(f"<span class='pill'>{esc(service)}</span>" for service in progress["selected_services"])
+    return page(
+        "Setup Guide",
+        f"""
+        <h1>Competition Setup Guide</h1>
+        <div class="notice">Follow these steps before opening the live attack-defense phase. Current phase: <strong>{esc(progress['phase'])}</strong>.</div>
+        {'<div class="notice ok">' + esc(message) + '</div>' if message else ''}
+        <div class="grid">
+          <div class="card step">
+            <span class="step-num">1</span>
+            <div>
+              <h2>Create teams</h2>
+              <p>{'Ready' if team_ok else 'No teams yet'}: <strong>{progress['team_count']}</strong> team(s).</p>
+              <p><a class="button" href="/admin/teams">Open teams</a></p>
+            </div>
+          </div>
+          <div class="card step">
+            <span class="step-num">2</span>
+            <div>
+              <h2>Select services</h2>
+              <p>Enabled services:</p>
+              <p>{service_pills or '<span class="muted">No services selected.</span>'}</p>
+              <p><a class="button secondary" href="/admin/teams">Choose challenge set</a></p>
+            </div>
+          </div>
+          <div class="card step">
+            <span class="step-num">3</span>
+            <div>
+              <h2>Generate packages</h2>
+              <p>{'Ready' if package_ok else 'Packages not ready'}: <strong>{progress['package_count']}</strong> package(s).</p>
+              <p>Give each team only its own folder from <code>{esc(BASE_DIR / 'generated' / 'team_packages')}</code>.</p>
+            </div>
+          </div>
+          <div class="card step">
+            <span class="step-num">4</span>
+            <div>
+              <h2>Run phases</h2>
+              <p>Use hardening for the offline window, then live for attack-defense scoring.</p>
+              <form method="post" action="/admin/phase" class="row">
+                <button name="phase" value="hardening" class="secondary">Start hardening</button>
+                <button name="phase" value="live">Start live</button>
+              </form>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <h2>Operator checklist</h2>
+          <p><span class="pill">Admin stays private</span><span class="pill">Teams receive own package only</span><span class="pill">No network between teams during hardening</span><span class="pill">Team servers connect to admin during live</span></p>
+        </div>
+        """,
+    )
+
+
 def dashboard_page() -> tuple[int, str, str]:
     rows = "".join(
         f"<tr><td>{esc(row['team'])}</td><td>{row['attack']}</td><td>{row['availability']}</td><td>{row['integrity']}</td><td>{row['penalty']}</td><td><strong>{row['total']}</strong></td><td class=\"{'ok' if row['connected'] else 'bad'}\">{'connected' if row['connected'] else 'missing'}</td></tr>"
         for row in scoreboard()
-    )
+    ) or "<tr><td colspan='7' class='empty'>No teams yet. Start with Setup Guide or Teams.</td></tr>"
+    progress = setup_progress()
     return page(
         "Dashboard",
         f"""
         <h1>Dashboard</h1>
         <div class="notice">Phase: <strong>{esc(phase())}</strong> | Round: <strong>{current_round()}</strong> | Next flags in: <strong>{round_remaining()}s</strong></div>
+        <div class="grid">
+          <div class="card"><h2>Teams</h2><p><strong>{progress['team_count']}</strong> configured</p><p><a class="button secondary" href="/admin/teams">Manage teams</a></p></div>
+          <div class="card"><h2>Packages</h2><p><strong>{progress['package_count']}</strong> generated</p><p><a class="button secondary" href="/admin/setup">Setup guide</a></p></div>
+          <div class="card"><h2>Services</h2><p><strong>{len(progress['selected_services'])}</strong> enabled</p><p><a class="button secondary" href="/admin/teams">Choose services</a></p></div>
+        </div>
         <div class="card">
+          <h2>Phase Control</h2>
           <form method="post" action="/admin/phase" class="row">
             <button name="phase" value="setup" class="secondary">Setup</button>
             <button name="phase" value="hardening" class="secondary">Hardening</button>
@@ -680,13 +780,15 @@ def public_scoreboard_page() -> tuple[int, str, str]:
 def teams_page() -> tuple[int, str, str]:
     rows = []
     enabled = set(selected_services())
+    package_dir = BASE_DIR / "generated" / "team_packages"
+    package_count = len([item for item in package_dir.iterdir() if item.is_dir()]) if package_dir.exists() else 0
     service_checks = "".join(
         f"""
-        <label>
+        <label class="card" style="display:block">
           <input type="checkbox" name="services" value="{esc(key)}" {'checked' if key in enabled else ''}>
-          {esc(meta['name'])} <small>({esc(meta['category'])})</small>
+          <strong>{esc(meta['name'])}</strong> <span class="pill">{esc(meta['category'])}</span>
+          <p class="muted">{esc(meta['description'])}</p>
         </label>
-        <p>{esc(meta['description'])}</p>
         """
         for key, meta in SERVICE_CATALOG.items()
     )
@@ -721,6 +823,7 @@ def teams_page() -> tuple[int, str, str]:
         "Teams",
         f"""
         <h1>Teams</h1>
+        <div class="notice">Create teams first, choose the challenge services, then generate packages. Generated packages: <strong>{package_count}</strong>.</div>
         <div class="card">
           <h2>Create Team</h2>
           <form method="post" action="/admin/teams" class="row">
@@ -737,7 +840,7 @@ def teams_page() -> tuple[int, str, str]:
             <input type="hidden" name="action" value="generate">
             <div style="flex-basis:100%">
               <h3>Enabled Vulnerability Services</h3>
-              {service_checks}
+              <div class="grid">{service_checks}</div>
             </div>
             <button name="action" value="generate">Generate team configs and packages</button>
           </form>
@@ -754,8 +857,15 @@ def flags_page() -> tuple[int, str, str]:
     body_rows = "".join(
         f"<tr><td>{esc(row['team'])}</td><td>{esc(row['service'])}</td><td>{row['round']}</td><td><code>{esc(row['flag'])}</code></td><td>{time.strftime('%H:%M:%S', time.localtime(row['received_at']))}</td></tr>"
         for row in rows
-    ) or "<tr><td colspan='5'>No flag reports yet.</td></tr>"
-    return page("Flags", f"<h1>Flag Reports</h1><table><thead><tr><th>Team</th><th>Service</th><th>Round</th><th>Flag</th><th>Received</th></tr></thead><tbody>{body_rows}</tbody></table>")
+    ) or "<tr><td colspan='5' class='empty'>No flag reports yet. They appear after teams run their servers in live phase or after the checker succeeds.</td></tr>"
+    return page(
+        "Flags",
+        f"""
+        <h1>Flag Reports</h1>
+        <div class="notice">Use this page as the operator answer table. During live, each team/service/round should appear here.</div>
+        <table><thead><tr><th>Team</th><th>Service</th><th>Round</th><th>Flag</th><th>Received</th></tr></thead><tbody>{body_rows}</tbody></table>
+        """,
+    )
 
 
 def submissions_page() -> tuple[int, str, str]:
@@ -764,8 +874,15 @@ def submissions_page() -> tuple[int, str, str]:
     body_rows = "".join(
         f"<tr><td>{esc(row['attacker'])}</td><td>{esc(row['victim'])}</td><td>{esc(row['service'])}</td><td>{row['round']}</td><td><code>{esc(row['flag'])}</code></td><td>+{row['points']}</td><td>{time.strftime('%H:%M:%S', time.localtime(row['created_at']))}</td></tr>"
         for row in rows
-    ) or "<tr><td colspan='7'>No submissions yet.</td></tr>"
-    return page("Submissions", f"<h1>Submissions</h1><table><thead><tr><th>Attacker</th><th>Victim</th><th>Service</th><th>Round</th><th>Flag</th><th>Points</th><th>Time</th></tr></thead><tbody>{body_rows}</tbody></table>")
+    ) or "<tr><td colspan='7' class='empty'>No submissions yet. Teams can submit stolen flags only after the phase is live.</td></tr>"
+    return page(
+        "Submissions",
+        f"""
+        <h1>Submissions</h1>
+        <div class="notice">Accepted attack submissions are listed here. Duplicate attacker/victim/service/round submissions do not score twice.</div>
+        <table><thead><tr><th>Attacker</th><th>Victim</th><th>Service</th><th>Round</th><th>Flag</th><th>Points</th><th>Time</th></tr></thead><tbody>{body_rows}</tbody></table>
+        """,
+    )
 
 
 def scoring_page(message: str = "") -> tuple[int, str, str]:
@@ -773,6 +890,14 @@ def scoring_page(message: str = "") -> tuple[int, str, str]:
     inputs = "".join(
         f"<label>{esc(key)}</label><input type='number' min='0' name='{esc(key)}' value='{value}'>"
         for key, value in cfg.items()
+    )
+    return page(
+        "Scoring",
+        f"""
+        <h1>Scoring</h1>
+        <div class="notice">Adjust these values before the match starts. Changes apply to future scoring decisions and manual penalties.</div>
+        <div class="card"><form method="post" action="/admin/scoring">{inputs}<button>Save scoring</button></form>{'<p class="ok">' + esc(message) + '</p>' if message else ''}</div>
+        """,
     )
 
 
@@ -783,7 +908,7 @@ def penalties_page(message: str = "") -> tuple[int, str, str]:
     body_rows = "".join(
         f"<tr><td>{esc(row['team'])}</td><td>{esc(row['reason'])}</td><td>-{row['points']}</td><td>{time.strftime('%H:%M:%S', time.localtime(row['created_at']))}</td></tr>"
         for row in rows
-    ) or "<tr><td colspan='4'>No penalties.</td></tr>"
+    ) or "<tr><td colspan='4' class='empty'>No penalties. Manual penalties for admin/infrastructure attacks will appear here.</td></tr>"
     return page(
         "Penalties",
         f"""
@@ -818,11 +943,43 @@ def export_state() -> dict[str, Any]:
         "submissions": [dict(row) for row in submission_rows],
         "penalties": [dict(row) for row in penalty_rows],
     }
+
+
+def export_page() -> tuple[int, str, str]:
+    state = export_state()
     return page(
-        "Scoring",
+        "Export",
         f"""
-        <h1>Scoring</h1>
-        <div class="card"><form method="post" action="/admin/scoring">{inputs}<button>Save</button></form>{'<p class="ok">' + esc(message) + '</p>' if message else ''}</div>
+        <h1>Export</h1>
+        <div class="notice">This page summarizes the match export without showing raw JSON. Use the download link when you need the machine-readable file.</div>
+        <div class="grid">
+          <div class="card"><h2>Phase</h2><p><strong>{esc(state['phase'])}</strong></p></div>
+          <div class="card"><h2>Round</h2><p><strong>{state['round']}</strong></p></div>
+          <div class="card"><h2>Teams</h2><p><strong>{len(state['scoreboard'])}</strong></p></div>
+          <div class="card"><h2>Services</h2><p><strong>{len(state['services'])}</strong></p></div>
+          <div class="card"><h2>Flags</h2><p><strong>{len(state['flags'])}</strong></p></div>
+          <div class="card"><h2>Submissions</h2><p><strong>{len(state['submissions'])}</strong></p></div>
+        </div>
+        <div class="card">
+          <h2>Download</h2>
+          <p><a class="button" href="/admin/export.json">Download JSON export</a></p>
+        </div>
+        """,
+    )
+
+
+def api_landing_page() -> tuple[int, str, str]:
+    return page(
+        "API",
+        """
+        <h1>API Status</h1>
+        <div class="notice">These endpoints are for team servers and submit helpers. Browser users should normally use the admin pages.</div>
+        <div class="grid">
+          <div class="card"><h2>GET /api/state</h2><p>Current phase, round, services, and scoreboard. Add <code>?format=json</code> for raw JSON.</p></div>
+          <div class="card"><h2>POST /api/team/heartbeat</h2><p>Signed team heartbeat endpoint.</p></div>
+          <div class="card"><h2>POST /api/team/flags</h2><p>Signed team flag report endpoint.</p></div>
+          <div class="card"><h2>POST /api/submit</h2><p>Signed stolen-flag submission endpoint.</p></div>
+        </div>
         """,
     )
 
@@ -991,6 +1148,11 @@ class AdminHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def wants_json(self, parsed: urllib.parse.ParseResult) -> bool:
+        query = urllib.parse.parse_qs(parsed.query)
+        accept = self.headers.get("Accept", "")
+        return query.get("format", [""])[0] == "json" or "application/json" in accept
+
     def require_admin(self) -> bool:
         if self.is_admin():
             return True
@@ -998,11 +1160,16 @@ class AdminHandler(BaseHTTPRequestHandler):
         return False
 
     def do_GET(self) -> None:
-        path = urllib.parse.urlparse(self.path).path.rstrip("/") or "/"
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path.rstrip("/") or "/"
         if path == "/":
             return self.redirect("/admin")
         if path == "/api/state":
-            return self.send_json(200, api_state())
+            if self.wants_json(parsed):
+                return self.send_json(200, api_state())
+            return self.respond(api_landing_page())
+        if path.startswith("/api"):
+            return self.respond(api_landing_page())
         if path == "/scoreboard":
             return self.respond(public_scoreboard_page())
         if path == "/admin/login":
@@ -1011,6 +1178,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             return
         if path == "/admin":
             return self.respond(dashboard_page())
+        if path == "/admin/setup":
+            return self.respond(setup_guide_page())
         if path == "/admin/teams":
             return self.respond(teams_page())
         if path == "/admin/flags":
@@ -1022,8 +1191,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/admin/penalties":
             return self.respond(penalties_page())
         if path == "/admin/export":
+            return self.respond(export_page())
+        if path == "/admin/export.json":
             return self.send_json(200, export_state())
-        return self.respond(page("Not found", "<h1>Not found</h1>", HTTPStatus.NOT_FOUND))
+        return self.respond(error_page("Page not found", "That page is not part of the competition console. Use the navigation links above to continue.", HTTPStatus.NOT_FOUND))
 
     def do_POST(self) -> None:
         parsed = urllib.parse.urlparse(self.path)
@@ -1063,7 +1234,7 @@ class AdminHandler(BaseHTTPRequestHandler):
             payload = parse_body(headers, body)
             value = str(payload.get("phase", ""))
             if value not in PHASES:
-                return self.respond(page("Bad phase", "<h1>Bad phase</h1>", HTTPStatus.BAD_REQUEST))
+                return self.respond(error_page("Bad phase", "Choose one of setup, hardening, live, or ended.", HTTPStatus.BAD_REQUEST))
             set_setting("phase", value)
             return self.redirect("/admin")
         if path == "/admin/reset":
@@ -1083,11 +1254,11 @@ class AdminHandler(BaseHTTPRequestHandler):
             payload = parse_body(headers, body)
             team = str(payload.get("team", ""))
             if team not in teams():
-                return self.respond(page("Bad team", "<h1>Unknown team</h1>", HTTPStatus.BAD_REQUEST))
+                return self.respond(error_page("Unknown team", "Create the team first, then add a manual penalty.", HTTPStatus.BAD_REQUEST, "/admin/penalties", "Back to penalties"))
             try:
                 points = max(1, int(str(payload.get("points", "0"))))
             except ValueError:
-                return self.respond(page("Bad points", "<h1>Bad points</h1>", HTTPStatus.BAD_REQUEST))
+                return self.respond(error_page("Bad points", "Penalty points must be a positive integer.", HTTPStatus.BAD_REQUEST, "/admin/penalties", "Back to penalties"))
             reason = str(payload.get("reason", "")).strip() or "manual penalty"
             with DB_LOCK, db() as conn:
                 conn.execute(
@@ -1103,9 +1274,9 @@ class AdminHandler(BaseHTTPRequestHandler):
             data = teams()
             if action == "create":
                 if not valid_team_id(team):
-                    return self.respond(page("Bad team", "<h1>Bad team id</h1><p>Use lowercase letters, digits, and hyphen only; length 2-32.</p>", HTTPStatus.BAD_REQUEST))
+                    return self.respond(error_page("Bad team ID", "Use lowercase letters, digits, and hyphen only; length 2-32. Do not use underscores.", HTTPStatus.BAD_REQUEST, "/admin/teams", "Back to teams"))
                 if team in data:
-                    return self.respond(page("Team exists", "<h1>Team already exists</h1>", HTTPStatus.CONFLICT))
+                    return self.respond(error_page("Team already exists", "Choose a different team ID or update the existing team's public URL.", HTTPStatus.CONFLICT, "/admin/teams", "Back to teams"))
                 data[team] = {
                     "secret": generate_secret(),
                     "public_base_url": str(payload.get("public_base_url", "")),
@@ -1114,13 +1285,13 @@ class AdminHandler(BaseHTTPRequestHandler):
                 return self.redirect("/admin/teams")
             if action == "update":
                 if team not in data:
-                    return self.respond(page("Not found", "<h1>Unknown team</h1>", HTTPStatus.NOT_FOUND))
+                    return self.respond(error_page("Unknown team", "The team no longer exists. Refresh the teams page and try again.", HTTPStatus.NOT_FOUND, "/admin/teams", "Back to teams"))
                 data[team]["public_base_url"] = str(payload.get("public_base_url", ""))
                 save_teams(data)
                 return self.redirect("/admin/teams")
             if action == "rotate":
                 if team not in data:
-                    return self.respond(page("Not found", "<h1>Unknown team</h1>", HTTPStatus.NOT_FOUND))
+                    return self.respond(error_page("Unknown team", "The team no longer exists. Refresh the teams page and try again.", HTTPStatus.NOT_FOUND, "/admin/teams", "Back to teams"))
                 data[team]["secret"] = generate_secret()
                 save_teams(data)
                 return self.redirect("/admin/teams")
@@ -1133,8 +1304,8 @@ class AdminHandler(BaseHTTPRequestHandler):
                 set_selected_services(multi_payload.get("services", []))
                 generate_team_packages()
                 return self.redirect("/admin/teams")
-            return self.respond(page("Bad action", "<h1>Bad action</h1>", HTTPStatus.BAD_REQUEST))
-        return self.respond(page("Not found", "<h1>Not found</h1>", HTTPStatus.NOT_FOUND))
+            return self.respond(error_page("Bad team action", "The submitted form action was not recognized. Return to Teams and try again.", HTTPStatus.BAD_REQUEST, "/admin/teams", "Back to teams"))
+        return self.respond(error_page("Page not found", "That action is not part of the competition console.", HTTPStatus.NOT_FOUND))
 
 
 def main() -> None:

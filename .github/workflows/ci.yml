@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Python ${{ matrix.python-version }} validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.13"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Compile Python sources
+        run: python -m compileall -q app.py distributed
+
+      - name: Run arena smoke test
+        env:
+          FTF_ADMIN_PASSWORD: ci-admin-password
+        run: >-
+          python -c "import app;
+          app.init_db();
+          assert app.flag_for('alpha', 'memo').startswith('FTF{');
+          assert len(app.SERVICES) >= 12;
+          print('arena smoke test passed')"
